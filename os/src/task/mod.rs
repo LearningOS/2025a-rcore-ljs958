@@ -14,6 +14,9 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+///最大系统调用数
+pub const MAX_SYSCALL_NUM: usize = 512;
+
 use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
@@ -45,6 +48,8 @@ pub struct TaskManagerInner {
     tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
     current_task: usize,
+
+    task_counts: [[u32 ; MAX_SYSCALL_NUM]; MAX_APP_NUM],
 }
 
 lazy_static! {
@@ -65,6 +70,7 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    task_counts: [[0; MAX_SYSCALL_NUM]; MAX_APP_NUM],
                 })
             },
         }
@@ -135,6 +141,28 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+    ///获得当前任务ID
+    pub fn get_current_task_id(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        inner.current_task
+    }
+    /// 增加指定任务的系统调用计数
+    pub fn add_task_syscall(&self, task_id: usize, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        if task_id < MAX_APP_NUM && syscall_id < MAX_SYSCALL_NUM {
+            inner.task_counts[task_id][syscall_id] += 1;
+        }
+    }
+    
+    /// 获取指定任务的系统调用计数
+    pub fn get_count(&self, task_id: usize, syscall_id: usize) -> u32 {
+        let inner = self.inner.exclusive_access();
+        if task_id < MAX_APP_NUM && syscall_id < MAX_SYSCALL_NUM {
+            inner.task_counts[task_id][syscall_id]
+        } else {
+            0
+        }
+    }
 }
 
 /// Run the first task in task list.
@@ -168,4 +196,16 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+///增加指定任务的系统调用计数
+pub fn add_task_syscall(task_id: usize, syscall_id: usize) {
+    TASK_MANAGER.add_task_syscall(task_id, syscall_id);
+}
+///获得当前任务ID
+pub fn get_current_task_id() -> usize {
+    TASK_MANAGER.get_current_task_id()
+}
+///获取指定任务的系统调用计数
+pub fn get_count(task_id: usize, syscall_id: usize) -> u32 {
+    TASK_MANAGER.get_count(task_id, syscall_id)
 }

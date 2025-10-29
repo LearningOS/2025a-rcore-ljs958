@@ -179,3 +179,29 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
     }
     v
 }
+
+/// Check whether the user virtual address `ptr` (for at least one byte) is readable
+/// under the page table represented by `token`.
+pub fn is_user_readable(token: usize, ptr: *const u8) -> bool {
+    let page_table = PageTable::from_token(token);
+    let va = VirtAddr::from(ptr as usize);
+    let vpn = va.floor();
+    if let Some(pte) = page_table.translate(vpn) {
+        // page must be valid, user-accessible and readable
+        return pte.is_valid() && pte.flags().contains(PTEFlags::U) && pte.flags().contains(PTEFlags::R);
+    }
+    false
+}
+
+/// Check whether the user virtual address `ptr` (for at least one byte) is writable
+/// under the page table represented by `token`.
+pub fn is_user_writable(token: usize, ptr: *const u8) -> bool {
+    let page_table = PageTable::from_token(token);
+    let va = VirtAddr::from(ptr as usize);
+    let vpn = va.floor();
+    if let Some(pte) = page_table.translate(vpn) {
+        // page must be valid, user-accessible and writable
+        return pte.is_valid() && pte.flags().contains(PTEFlags::U) && pte.flags().contains(PTEFlags::W);
+    }
+    false
+}

@@ -2,13 +2,12 @@
 use alloc::sync::Arc;
 
 use crate::{
-    loader::get_app_data_by_name,
-    mm::{translated_refmut, translated_str},
-    task::{
+    config::PAGE_SIZE, loader::get_app_data_by_name, mm::{MapPermission, VirtAddr, translated_byte_buffer, translated_refmut, translated_str}, task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next,
-    },
+        suspend_current_and_run_next
+    }, timer::get_time_us
 };
+
 
 #[repr(C)]
 #[derive(Debug)]
@@ -110,7 +109,34 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
         "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let us = get_time_us();
+    let t_val = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+
+
+    let size = 16;
+    let token = current_user_token();
+    let buffers = translated_byte_buffer(token, _ts as *const u8, size);
+
+    let time_bytes = unsafe {
+        core::slice::from_raw_parts(
+            &t_val as *const TimeVal as *const u8,
+            size
+        )
+    };
+
+    let mut offset = 0;
+    for buf in buffers {
+        let len = buf.len();
+        if offset + len > time_bytes.len() {
+            return -1; // 缓冲区长度不匹配
+        }
+        buf.copy_from_slice(&time_bytes[offset..offset+len]);
+        offset += len;
+    }
+    0
 }
 
 /// YOUR JOB: Implement mmap.
@@ -119,7 +145,52 @@ pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
         "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    // 基本参数检查
+    if _start % PAGE_SIZE != 0 {
+        return -1;
+    }
+    
+    if _len == 0 {
+        return 0;
+    }
+    
+    // 转换保护标志
+    let map_perm = match prot_to_map_permission(_port) {
+        Some(perm) => perm,
+        None => return -1,
+    };
+    
+    // 计算结束地址
+    let page_count = (_len + PAGE_SIZE - 1) / PAGE_SIZE;
+    let end_addr = _start + page_count * PAGE_SIZE;
+    
+    let start_va = VirtAddr::from(_start);
+    let end_va = VirtAddr::from(end_addr);
+    
+
+    with_current_task(|current_task| {
+    // 安全地使用 current_task
+        let memory_set = &mut current_task.memory_set;
+        if memory_set.mmap_anonymous(start_va, end_va, map_perm) {
+        0
+        } else {
+            -1
+        }
+    })
+}
+
+//权限转化
+fn prot_to_map_permission(prot: usize) -> Option<MapPermission> {
+    if prot & !0x7 != 0 || prot & 0x7 == 0 {
+        return None;
+    }
+    
+    let mut perm = MapPermission::U;
+    if prot & 0x1 != 0 { perm |= MapPermission::R; }
+    if prot & 0x2 != 0 { perm |= MapPermission::W; }
+    if prot & 0x4 != 0 { perm |= MapPermission::X; }
+    
+    Some(perm)
 }
 
 /// YOUR JOB: Implement munmap.
@@ -128,7 +199,32 @@ pub fn sys_munmap(_start: usize, _len: usize) -> isize {
         "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    // 基本参数检查
+    if _start % PAGE_SIZE != 0 {
+        return -1;
+    }
+    
+    if _len == 0 {
+        return 0;
+    }
+    
+    // 计算结束地址
+    let page_count = (_len + PAGE_SIZE - 1) / PAGE_SIZE;
+    let end_addr = _start + page_count * PAGE_SIZE;
+    
+    let start_va = VirtAddr::from(_start);
+    let end_va = VirtAddr::from(end_addr);
+    
+
+    with_current_task(|current_task| {
+    // 安全地使用 current_task
+        let memory_set = &mut current_task.memory_set;
+        if memory_set.munmap_region(start_va, end_va) {
+        0
+        } else {
+            -1
+        }
+    })
 }
 
 /// change data segment size

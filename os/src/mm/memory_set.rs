@@ -37,6 +37,63 @@ pub struct MemorySet {
 }
 
 impl MemorySet {
+    /// 检查指定虚拟地址区域是否与现有映射重叠
+    pub fn is_region_overlap(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn = VirtPageNum::from(start_va);
+        let end_vpn = VirtPageNum::from(end_va);
+        
+        for area in &self.areas {
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+            
+            // 检查是否有重叠
+            if !(end_vpn <= area_start || start_vpn >= area_end) {
+                return true;
+            }
+        }
+        false
+    }
+    /// 映射匿名内存区域（mmap核心实现）
+    pub fn mmap_anonymous(
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+        permission: MapPermission,
+    ) -> bool {
+        // 检查重叠
+        if self.is_region_overlap(start_va, end_va) {
+            return false;
+        }
+        
+        // 创建新的映射区域
+        self.push(
+            MapArea::new(start_va, end_va, MapType::Framed, permission),
+            None,
+        );
+        
+        true
+    }        
+    /// munmap核心实现
+    pub fn munmap_region(
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+    ) -> bool {
+        let start_vpn = VirtPageNum::from(start_va);
+        let end_vpn = VirtPageNum::from(end_va);
+        
+        // 查找完全匹配的区域
+        if let Some(index) = self.areas.iter().position(|area| {
+            area.vpn_range.get_start() == start_vpn && 
+            area.vpn_range.get_end() == end_vpn
+        }) {
+            let mut area = self.areas.remove(index);
+            area.unmap(&mut self.page_table);
+            true
+        } else {
+            false
+        }
+    }
     /// Create a new empty `MemorySet`.
     pub fn new_bare() -> Self {
         Self {
